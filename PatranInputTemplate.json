@@ -1,0 +1,205 @@
+{
+    "Files": {
+        "Content": [
+            "# Comments: Hard-coded except for Geometry_File_Name",
+            "Patran_Model_Name = Nastran_mod  # Hard-Coded in PatranInputTemplate.json",
+            "Patran_Model_Dir = .\\  # Hard-Coded in PatranInputTemplate.json",
+            "Geometry_File_Name = $Geometry_File_Name",
+            "Geometry_File_Dir = ..\\..\\Parasolid  # Hard-Coded in PatranInputTemplate.json",
+            "Geometry_File_Type = Parasolid  # Hard-Coded in PatranInputTemplate.json"
+        ], 
+        "SectionName": "Files"
+    }, 
+    "Load": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "Type = $Type", 
+            "SubCase_ID = $SubCase_ID", 
+            "Geometry_ID = $Geometry_ID", 
+            "Load_Value_ID = $Load_Value_ID"
+        ], 
+        "SectionName": "Load"
+    }, 
+    "Layer": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "Material_ID = $Material_ID", 
+            "Thickness = $Thickness", 
+            "Orientation = $Orientation", 
+            "Drop_Order = $Drop_Order"
+        ], 
+        "SectionName": "Layer"
+    }, 
+    "Constraint_Specifier_Displacement": {
+        "Content": [
+            "# Comments: $Comments",
+            "# XML Text: $XML_Text",
+            "ID = $ID",
+            "x_Disp_State = $x_Disp_State",
+            "y_Disp_State = $y_Disp_State",
+            "z_Disp_State = $z_Disp_State",
+            "x_Rot_State = $x_Rot_State",
+            "y_Rot_State = $y_Rot_State",
+            "z_Rot_State = $z_Rot_State",
+            "x_Disp_Val = $x_Disp_Val",
+            "y_Disp_Val = $y_Disp_Val",
+            "z_Disp_Val = $z_Disp_Val",
+            "x_Rot_Val = $x_Rot_Val",
+            "y_Rot_Val = $y_Rot_Val",
+            "z_Rot_Val = $z_Rot_Val"
+        ],
+        "SectionName": "Displacement"
+    }, 
+    "Mesh_Parameters": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "Max_Global_Length = $Max_Global_Length", 
+            "Max_Curv_Delta_Div_Edge_Len = $Max_Curv_Delta_Div_Edge_Len", 
+            "Ratio_Min_Edge_To_Max_Edge =  $Ratio_Min_Edge_To_Max_Edge", 
+            "Match_Face_Proximity_Tol = $Match_Face_Proximity_Tol"
+        ], 
+        "SectionName": "Mesh_Parameters"
+    }, 
+    "Constraint": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "Type = $Type", 
+            "SubCase_ID = $SubCase_ID", 
+            "Geometry_ID = $Geometry_ID", 
+            "Displacement_ID = $Displacement_ID"
+        ], 
+        "SectionName": "Constraint"
+    }, 
+    "Geometry": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "Type = FACE  # Hard-Coded in PatranInputTemplate.json", 
+            "Point_ID = $Point_ID"
+        ], 
+        "SectionName": "Geometry"
+    }, 
+    "Load_Value_Vector": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "x_Value = $x_Value", 
+            "y_Value = $y_Value", 
+            "z_Value = $z_Value"
+        ], 
+        "SectionName": "Load_Value"
+    }, 
+    "Material": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "Tropic_Type = $Tropic_Type",
+            "Name = $Name",
+            "Description = $Description",
+            "Elastic_Modulus = $Elastic_Modulus",
+            "Poissons_Ratio = $Poissons_Ratio",
+            "Density = $Density",
+            "Therm_Expan_Coef = $Therm_Expan_Coef"
+        ],
+        "SectionName": "Material"
+    }, 
+    "SubCase": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = 1  # Hard-Coded in PatranInputTemplate.json", 
+            "Constraint_ID = 259  # Hard-Coded in PatranInputTemplate.json", 
+            "Load_ID = 559  # Hard-Coded in PatranInputTemplate.json"
+        ], 
+        "SectionName": "SubCase"
+    }, 
+    "Analysis": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "Configuration_ID = $Configuration_ID", 
+            "Date = $Date", 
+            "Source_Model = $Source_Model", 
+            "Type = $Type", 
+            "Solver = $Solver", 
+            "Instructions = $Instructions"
+        ], 
+        "SectionName": "Analysis"
+    }, 
+    "Point": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "x_Cord = $x_Cord", 
+            "y_Cord = $y_Cord", 
+            "z_Cord = $z_Cord"
+        ], 
+        "SectionName": "Point"
+    }, 
+    "Load_Value_Scalar": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "Scalar_Value = $Scalar_Value"
+        ], 
+        "SectionName": "Load_Value"
+    }, 
+    "Constraint_Specifier_Pin": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "AxialDisplacement = $AxialDisplacement", 
+            "AxialRotation = $AxialRotation"
+        ], 
+        "SectionName": "Pin"
+    }, 
+    "Surface": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "Geometry_ID = $Geometry_ID", 
+            "Element_Type = $Surface_Element_Type", 
+            "Mesh_Parameters_ID = $Surface_Mesh_Parameters_ID"
+        ], 
+        "SectionName": "Surface"
+    }, 
+    "Surface_Contents": {
+        "Content": [
+            "# Comments: $Comments", 
+            "# XML Text: $XML_Text", 
+            "ID = $ID", 
+            "Surface_ID = $Surface_ID", 
+            "Material_Layup_ID = $Material_Layup_ID", 
+            "Direction_Start_Point_ID = $Direction_Start_Point_ID", 
+            "Direction_End_Point_ID = $Direction_End_Point_ID", 
+            "Position = $Surface_Contents_Position", 
+            "Offset_Value = $Surface_Contents_Offset_Value"
+        ], 
+        "SectionName": "Surface_Contents"
+    },
+    "Solid": {
+        "Content": [
+            "# :Comments: $Comments",
+            "ID = $ID",
+            "Element_Type = $Element_Type",
+            "Material_ID = $Material_ID",
+            "Mesh_Parameters_ID = $Mesh_Parameters_ID"
+        ],
+        "SectionName": "Solid"
+    }
+}

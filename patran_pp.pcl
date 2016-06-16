@@ -1,0 +1,1444 @@
+/*********************************************************************************
+Title: 			Patran Post Processing
+Last Revised: 	6/13/2016
+
+This program:
+1. Reads a BDF file
+2. Attaches to a xdb database
+3. Computes VM (VonMises), MP (Maximum Principal), and D (Displacement) for each part
+4. Stores the computed values in a file typically named Nastran_mod_out.txt
+	Example contents:
+		VM,SC1:DEFAULT,P1_Solid_M1_ALUMINUM_ALLO,75.25251
+		VM,SC1:DEFAULT,P2_Solid_M1_ALUMINUM_ALLO,51.34026
+		MP,SC1:DEFAULT,P1_Solid_M1_ALUMINUM_ALLO,79.947426
+		MP,SC1:DEFAULT,P2_Solid_M1_ALUMINUM_ALLO,57.42321
+		D,SC1:DEFAULT,P1_Solid_M1_ALUMINUM_ALLO,1.7320316
+		D,SC1:DEFAULT,P2_Solid_M1_ALUMINUM_ALLO,0.011528301
+5. Produces stress/displacement contour plots
+
+Note - 	This program supports being run multiple times in the same directory.  In other words,
+		this program does the necessary cleanup prior to running.
+
+Logging and Error Handling
+--------------------------
+This program:
+1) Deletes _SUCCEEDED_PP.TXT if it exists
+2) If no errors occur, this program creates  _SUCCEEDED_PP.TXT.  If you want to know if the program completed without
+   errors, check for the existence of _SUCCEEDED_PP.TXT.
+3) If an error occurs, error messages will be appended to _FAILED.txt.  Note - this program does
+	not delete _FAILED.txt.  It will create it if errors occur and it does not exist.  If errors
+	occur and it does exist, the errors will be appended to _FAILED.txt.
+4) Logs the status of each step of the program to a file typically named Nastran_mod_PP_Application.log
+	
+
+This program currently only supports models created via Solid parts.  It is 
+not know if the program will work with models created from surfaces.
+
+
+Example Session File:
+--------------------
+!!compile patran_pp.pcl into patran_pp.plb
+!!library patran_pp.plb
+STRING dir[262] = ".\"
+STRING filename[262] = "Nastran_mod"
+STRING bdfPath[262] = "Nastran_mod.bdf"
+STRING xdbPath[262] = "Nastran_mod.xdb"
+vPostProcessing.PostProcess(dir, filename, bdfPath, xdbPath)
+
+Example Bat File:
+------------------
+patran -b -graphics -sfp Nastran_mod_PP.ses -stdout Nastran_mod_PP_log.txt
+
+Revision History
+---------------
+Date   		Developer  	Description
+------		----------	-------------------------------------------------------------
+~2013		R. Wrenn	Initial Release
+6/13/2016	R. Owens	Updated with error checking, logging, and general refactoring.
+*********************************************************************************/
+
+CLASS vPostProcessing
+
+
+	CLASSWIDE INTEGER ci_Display_Tool_Does_Not_Exist
+	
+	
+	CLASSWIDE STRING  errorMsg[1024] 
+	CLASSWIDE INTEGER errorLevel
+	
+
+	
+	CLASSWIDE STRING	c_ClassName[32]
+################################################################################	
+FUNCTION initialize()
+	#4700201 The specified Results Display tool does not exist.
+	ci_Display_Tool_Does_Not_Exist = 4700201
+END FUNCTION
+################################################################################
+FUNCTION postProcess(in_dir, in_filename, in_bdfPath, in_xdbPath)	
+#	STRING in_installPath[]
+    STRING in_filename[]
+	STRING in_bdfPath[] 
+	STRING in_xdbPath[] 
+	STRING in_dir[]
+	
+	INTEGER returnStatus = 0	
+	INTEGER i
+	
+	vPostProcessing.initialize()
+	
+	c_ClassName = "vPostProcessing"
+	
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".postProcess"			
+	
+	# Delete _SUCCEEDED.TXT
+	IF (file_exists("_SUCCEEDED_PP.TXT","" )) THEN
+		file_delete("_SUCCEEDED_PP.TXT") 
+	End IF	
+		
+	STRING resultsOutputTextFile[512]
+ 	
+	# e.g. Nastran_mod_out.txt
+	resultsOutputTextFile = in_filename // "_out.txt"
+		
+	# Delete filename.txt if it exists  e.g. Nastran_mod_out.txt
+	IF (file_exists(resultsOutputTextFile,"" )) THEN
+		file_delete(resultsOutputTextFile) 
+	End IF		
+		
+	STRING log_DirAndFileName[256]
+	
+	log_DirAndFileName = ".\" // in_filename // "_PP_Application.log"
+	
+	vLogger.initialize(log_DirAndFileName)
+
+	####################################
+	# Log Input File Data and Date/Time
+	####################################		
+	text_write_string( vLogger.getChannel(), "Date Time:       " // sys_date() // "  " // sys_time())
+	text_write_string( vLogger.getChannel(), "MSC Application: " // sys_product()// " " // sys_release())
+	text_write_string( vLogger.getChannel(), "" )	
+	text_write_string( vLogger.getChannel(), "in_dir:          " // in_dir)
+	text_write_string( vLogger.getChannel(), "in_filename:     " // in_filename)
+	text_write_string( vLogger.getChannel(), "in_bdfPath:      " // in_bdfPath)
+	text_write_string( vLogger.getChannel(), "in_xdbPath:      " // in_xdbPath)	
+	text_write_string( vLogger.getChannel(), "" )		
+	
+		
+	#createProject_ImportBDF (in_installPath, in_filename, in_dir, in_bdfPath, in_xdbPath)
+	returnStatus = vPostProcessing.createProject_ImportBDF(in_filename, in_dir, in_bdfPath, in_xdbPath)
+	
+	#getAllPartsFactorMax("VM", in_filename // "_out")
+	#getAllPartsFactorMax("MP", in_filename // "_out")
+	#getAllPartsFactorMax("D", in_filename // "_out")	
+	
+	IF ( returnStatus == 0 ) THEN
+		returnStatus = vPostProcessing.getAllPartsFactorMax("VM", resultsOutputTextFile)
+	END IF
+	
+	IF ( returnStatus == 0 ) THEN
+		returnStatus = vPostProcessing.getAllPartsFactorMax("MP", resultsOutputTextFile)
+	END IF
+	
+	IF ( returnStatus == 0 ) THEN
+		returnStatus = vPostProcessing.getAllPartsFactorMax("D", resultsOutputTextFile)
+	END IF	
+	
+
+	returnStatus = vPostProcessing.getALLPlots(in_Filename)
+
+	vPostProcessing.closeProject()
+	
+	############################
+	# Write Final Result Files
+	############################
+	IF ( returnStatus == 0  && vLogger.getErrorMessages_current() == 0 ) THEN
+		INTEGER succeededFile = 0
+		text_open( "_SUCCEEDED_PP.TXT", "NOWA", 0, 0, succeededFile )	
+		text_write_string ( succeededFile, "Post processing completed successfully" )			
+		text_write_string( succeededFile, "Date Time: " // sys_date() // "  " // sys_time())			
+		text_close(succeededFile,"")		
+		text_write_string ( vLogger.getChannel(), "" )					
+		text_write_string( vLogger.getChannel(), "Patran post-processing was SUCCESSFUL, Date Time: " // sys_date() // "  " // sys_time())		
+	ELSE
+		INTEGER failedFile = 0
+		
+		text_open( "_FAILED.TXT", "NOWA", 0, 0, failedFile )		
+		FOR ( i = 1 TO vLogger.getErrorMessages_current() )
+			text_write( failedFile, "%A%",returnStatus,0.0,vLogger.getErrorMessage(i))
+		END FOR
+		text_close(failedFile,"")	
+		
+		text_write_string ( vLogger.getChannel(), "" )		
+		FOR ( i = 1 TO vLogger.getErrorMessages_current() )
+			text_write( vLogger.getChannel(), "%A%",returnStatus,0.0,vLogger.getErrorMessage(i))
+		END FOR
+
+		text_write_string( vLogger.getChannel(), "Patran post-processing FAILED, Date Time: " // sys_date() // "  " // sys_time())
+	END IF	
+	
+	
+	vLogger.closeLogFile()
+	vLogger.destruct()	
+	
+	
+
+END FUNCTION
+################################################################################
+$dbdir is absolute path to new project's desired directory
+$bdf and xdb paths relative to dbdir
+$bdfPath and xdbPath need proper file extensions of ".bdf" and ".xdb"
+# FUNCTION createProject_ImportBDF (installPath, dbname, dbdir, bdfPath, xdbPath)
+FUNCTION createProject_ImportBDF (dbname, dbdir, bdfPath, xdbPath)
+#    STRING installPath[512]
+    STRING dbname[]
+    STRING dbdir[]
+    STRING bdfPath[]
+    STRING xdbPath[]
+    GLOBAL REAL defWidth
+    GLOBAL REAL defHeight
+    defWidth = 18.427588
+    defHeight = 8.0
+    
+	INTEGER returnStatus = 0	
+	
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".createProject_ImportBDF"	
+
+	STRING db_Path_Name[512]
+	IF ( dbdir == ".\" ) THEN
+		db_Path_Name = dbdir // dbname // ".db"
+	ELSE
+		db_Path_Name = dbdir // "\" // dbname // ".db"
+	END IF
+	
+	IF (file_exists(db_Path_Name,"" )) THEN
+		file_delete(db_Path_Name) 
+	End IF		
+	
+    #uil_file_close.go(  )
+    #uil_file_new.go( installPath // "\" // "template.db", dbdir // "\" // dbname // ".db" )
+    #returnStatus =  uil_file_new.go( "", dbdir // "\" // dbname // ".db" )	
+	
+	returnStatus =  vPatranUtils.createPatranDB(	dbname,	dbdir )
+	IF ( returnStatus != 0 ) THEN return returnStatus
+
+    #set_current_dir( dbdir )	
+	returnStatus =  vPatranUtils.setPatranWorkingDir(dbdir )
+	IF ( returnStatus != 0 ) THEN return returnStatus	
+
+	
+    returnStatus =  nastran_input_import( bdfPath, "default_group", 11, @
+        [TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, TRUE], @
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], @
+        [-2000000000, -2000000000, -2000000000, -2000000000, -2000000000, -2000000000, -2000000000, -2000000000, 0, 0, 1000] )
+    
+    IF ( returnStatus != 0 ) THEN
+		errorMsg = "Could not import import bdf (function nastran_input_import()), File: " // bdfPath // ", Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+        RETURN returnStatus	
+    END IF				
+	
+	
+    msc_dra_init_stream(  )
+    msc_dra_add_param( "DATABASE", dbdir // dbname // ".db" )
+    msc_dra_add_param( "JOBNAME", "" )
+    msc_dra_add_param( "RESULTS FILE", xdbPath )
+    msc_dra_add_param( "OBJECT", "Result Entities" )
+    msc_dra_add_param( "ANALYSIS TYPE", "Structural" )
+    msc_dra_add_param( "DIVISION TOLERANCE", "1.0E-8" )
+    msc_dra_add_param( "NUMERICAL TOLERANCE", "1.0E-4" )
+    msc_dra_add_param( "MODEL TOLERANCE", "0.0049999999" )
+    msc_dra_add_param( "ROTATIONAL NODAL RESULTS", "OFF" )
+    msc_dra_add_param( "STRESS/STRAIN INVARIANTS", "OFF" )
+    msc_dra_add_param( "PRINCIPAL DIRECTIONS", "OFF" )
+    msc_dra_add_param( "ELEMENT RESULTS POSITIONS", "Nodal       " )
+    msc_dra_add_param( "TITLE DESCRIPTION", "ON" )
+    msc_dra_finish_stream(  )
+    analysis_import( "MSC.Nastran", "",  "Attach Results File No Job", xdbPath, TRUE )
+    
+    ga_viewport_location_set   ( "default_viewport", 0.0, 0.0, 1 )
+    ga_viewport_size_set       ( "default_viewport", defWidth, defHeight, 1 )
+	
+	uil_primary_file.db_save( )
+    #returnStatus =  uil_primary_file.db_save( )
+    #IF ( returnStatus != 0 ) THEN
+	#	errorMsg = "uil_primary_file.db_save() returned an error, Return Status: " // str_from_integer(returnStatus)
+	#	errorLevel = vLogger.get_ci_ERROR()
+	#	vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+     #   RETURN returnStatus	
+    #END IF		
+	
+	RETURN returnStatus
+END FUNCTION
+################################################################################
+FUNCTION attachResults(xdbPath)
+    STRING xdbPath[]
+    
+    analysis_import( "MSC.Nastran", "",  "Attach Results File No Job", xdbPath, TRUE )
+    uil_primary_file.db_save()
+END FUNCTION
+################################################################################
+$do not suggest with db files created on another machine
+FUNCTION openProject(dbname)
+    STRING dbname[]
+    GLOBAL REAL defWidth
+    GLOBAL REAL defHeight
+    defWidth = 18.427588
+    defHeight = 8.0
+    
+    uil_file_close.go(  )
+    uil_file_open.go(dbname)
+END FUNCTION 
+################################################################################
+FUNCTION closeProject()
+
+	# The following function does not return a status
+    uil_file_close.goquit()
+	
+END FUNCTION
+################################################################################
+$factor = "VM" (for von Mises), "MP" (for max principal), "D" (for displacement, translation)
+$function gets the max factor value for a load case among the nodes listed in node_list
+$use with getPartElemNodes' nodeList to find max value for a specific part for a load case
+$returns max factor value
+FUNCTION getFactorMax(factor, node_list, loadcaseID, out_MaxFactor)
+    STRING factor[]
+    STRING node_list[]
+    INTEGER loadcaseID
+    INTEGER resultids(5)
+    INTEGER   subids(virtual)
+    INTEGER   nsub1
+    INTEGER   result_ids(4), nlayers, layerids(VIRTUAL)
+    STRING    layerlabels[80](VIRTUAL)
+#   INTEGER nres
+    
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".getFactorMax"	
+	
+	INTEGER returnStatus = 0	
+	
+    # Clear any previous results from the memory
+    returnStatus = res_utl_clear_result()
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "res_utl_clear_result() returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF		    
+	
+	
+    # Argument Initialization 
+    INTEGER itr2
+    INTEGER itr3
+    REAL maxFactor
+    REAL out_MaxFactor
+    STRING pName[32]
+    STRING sName[32]
+    INTEGER pID
+    INTEGER sID
+    out_MaxFactor = 0
+    
+     # Gets the subcases
+    returnStatus = res_utl_get_subcases(loadcaseID, nsub1, subids)
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "res_utl_get_subcases() returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF		 
+	 
+    
+    FOR (itr2 = 1 TO SYS_ARRAY_HBOUND(subids, 1))
+#		itr2 = 1
+        
+		IF (factor == "VM") THEN		
+            pName = "Stress Invariants"
+            sName = "Von Mises"
+        ELSE IF (factor == "MP") THEN
+            pName = "Stress Invariants"
+            sName = "Major Principal"
+        ELSE IF (factor == "D") THEN
+            pName = "Displacements"
+            sName = "Translational"
+        END IF
+        
+		returnStatus = 	res_data_get_result_ids(pName, sName, pID, sID)
+		IF ( returnStatus != 0 ) THEN
+			errorMsg = "res_data_get_result_ids() returned an error, Return Status: " // str_from_integer(returnStatus)
+			errorLevel = vLogger.get_ci_ERROR()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+		   RETURN returnStatus	
+		END IF
+        
+		# Gets the layer positions associated with the results
+        result_ids(1) = loadcaseID
+        result_ids(2) = subids(itr2)
+        result_ids(3) = pID
+        result_ids(4) = sID
+
+        returnStatus = res_utl_get_result_layers(result_ids, nlayers, layerids, layerlabels)
+		IF ( returnStatus != 0 ) THEN
+			errorMsg = "res_data_get_result_ids() returned an error, Return Status: " // str_from_integer(returnStatus)
+			errorLevel = vLogger.get_ci_ERROR()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+		   RETURN returnStatus	
+		END IF		
+		      	   
+        FOR (itr3 = 1 TO SYS_ARRAY_HBOUND(layerids, 1))
+			resultids(1) = result_ids(1)
+			resultids(2) = result_ids(2)
+			resultids(3) = result_ids(3)
+			resultids(4) = result_ids(4)		
+            resultids(5) = layerids(itr3)
+			 
+            returnStatus = vPostProcessing.getFactorMax2(factor, node_list, resultids, maxFactor)
+			IF ( returnStatus != 0 ) THEN
+			   RETURN returnStatus	
+			END IF					
+
+            IF (maxFactor > out_MaxFactor) THEN 
+                out_MaxFactor = maxFactor
+            END IF
+					
+        END FOR
+        
+#        #Release virtual arrays
+        SYS_FREE_ARRAY (layerids)
+        SYS_FREE_ARRAY (layerlabels)
+    END FOR
+#    SYS_FREE_ARRAY (subids)
+    
+	RETURN returnStatus
+END FUNCTION
+
+################################################################################
+$not meant for user to call
+$same as getFactorMax2 except for a specific subcase of a load
+$resultids(1) is load case id
+$resultids(2) is sub case id
+$resultid(3) is primary result id (getFactorIDs is relevant)
+$resultid (4) is secondary result id (getFactorIDs is relevant)
+$returns max factor value
+
+FUNCTION getFactorMax2(factor, node_list, resultids, out_MaxFactor)
+    STRING factor[]
+    STRING node_list[]
+    INTEGER resultids()
+    STRING derivation[10]
+	REAL out_MaxFactor
+	
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".getFactorMax2"	
+	
+	INTEGER returnStatus = 0
+
+	
+	
+    IF (factor == "VM") THEN
+        derivation = ""
+    ELSE IF (factor == "MP") THEN
+        derivation = ""
+    ELSE IF (factor == "D") THEN
+        derivation = "MAG"
+    END IF
+    
+    INTEGER data_type
+    INTEGER nres
+    INTEGER ids(VIRTUAL)
+    REAL results(VIRTUAL)
+    INTEGER minloc(6)
+    INTEGER maxloc(6)
+    
+    returnStatus  = res_utl_extract_nodal_results2(resultids, node_list, derivation, "", "DeriveAverage", "All", "ShapeFunc", "", 0., data_type, nres, ids, results, minloc,maxloc)
+
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "res_utl_extract_nodal_results2 returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	    RETURN returnStatus	
+	END IF
+	
+	
+#	IF (maxloc(1) != 0) THEN
+#		RETURN results(maxloc(1))
+#	ELSE  RETURN 0
+	out_MaxFactor = results(maxloc(1))
+
+	RETURN returnStatus
+
+END FUNCTION
+
+################################################################################
+$factor = "VM" (for von Mises), "MP" (for max principal), "D" (for displacement, translation)
+$if filename is empty string, no file output created
+$prints to Patran console (and file filename.txt) max value of each part for each load case
+FUNCTION getAllPartsFactorMax(factor, filename)
+    STRING factor[]
+    STRING filename[]
+    INTEGER partIDs(VIRTUAL)
+    INTEGER   nrc, lcids(virtual), nsub(virtual)
+    INTEGER itr
+    INTEGER itr2
+    STRING   s_title[80]
+    
+    INTEGER file
+    REAL maxFactor
+    STRING out[128]
+    
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".getAllPartsFactorMax"	
+	
+	INTEGER returnStatus = 0
+	
+    returnStatus = vPostProcessing.getAllPartIDs(partIDs)
+	
+	IF (returnStatus != 0 ) THEN RETURN returnStatus
+	
+    returnStatus = res_utl_get_loadcases(nrc, lcids, nsub)
+
+    IF ( returnStatus != 0 ) THEN
+		errorMsg = "res_utl_get_loadcases(nrc, lcids, nsub) returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+       RETURN returnStatus	
+    END IF			
+	
+	text_write_string ( vLogger.getChannel(), "" )
+	text_write_string ( vLogger.getChannel(), "Number of Load Cases: " // str_from_integer(nrc) )	
+	text_write_string ( vLogger.getChannel(), "Load Case ID      Sub Case" )
+	text_write_string ( vLogger.getChannel(), "------------      --------" )	
+	INTEGER i
+	FOR ( i = 1 to nrc )
+			text_write_string ( vLogger.getChannel(), str_from_integer(lcids(i)) // "                 " // str_from_integer(nsub(i)))
+	END FOR
+			
+	IF (filename == "") THEN
+		errorMsg = "Null file name for the metrics (VM, MP, DP) file"
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN -1			
+	END IF			
+    
+	returnStatus = text_open( filename, "NOWA", 0, 0, file )
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "text_open() returned an error, Filename: " //filename // @
+		" Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF	
+	text_write_string ( vLogger.getChannel(), "" )		
+	text_write_string ( vLogger.getChannel(), "File Opened for write access, File Name: " // filename  )	
+		   
+	text_write_string ( vLogger.getChannel(),"File Contents: " )     
+	
+    FOR (itr = 1 TO nrc)
+        db_get_load_case_title(lcids(itr), s_title)
+		
+        FOR (itr2 = 1 TO SYS_ARRAY_HBOUND(partIDs, 1))
+			STRING elemList[VIRTUAL]
+			STRING nodeList[VIRTUAL]
+			# dump partIDs(itr2)		
+			
+			returnStatus = vPostProcessing.getPartElemNodes(partIDs(itr2), elemList, nodeList)
+			IF ( returnStatus != 0 ) THEN
+			   RETURN returnStatus	
+			END IF			
+			
+#			dump elemList nodelist
+		
+            returnStatus = vPostProcessing.getFactorMax(factor, nodeList, lcids(itr), maxFactor)  
+			IF ( returnStatus != 0 ) THEN
+			   RETURN returnStatus	
+			END IF	
+			
+			# string_write( getPartName(partIDs(itr2)) // " : %F%", 0, maxFactor, "", out )
+			out = factor // "," // s_title // "," // vPostProcessing.getPartName(partIDs(itr2)) // ","//str_from_real(maxFactor)
+			text_write_string ( file, out)
+			text_write_string ( vLogger.getChannel(),out )  
+            
+            SYS_FREE_STRING (elemList)
+            SYS_FREE_STRING (nodeList)
+        END FOR
+    END FOR
+    
+    SYS_FREE_ARRAY (partIDs)
+    SYS_FREE_ARRAY (lcids)
+
+    text_close( file, " ")
+	
+	RETURN returnStatus
+END FUNCTION
+
+################################################################################
+$ fringe = "VM" (for von Mises), "MP" (for max principal), "D" (for displacement, translation), or "" (for no fringe plot)
+$ deform = "D" (for displacement, translation), or "" (for no displacement plot)
+FUNCTION createPlot(loadcase, subcase, fringe, deform)
+    STRING fringe[]
+    STRING deform[]
+    STRING loadcase[]
+    STRING subcase[]
+	
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".createPlot"	
+	
+	INTEGER returnStatus = 0
+    
+    $ deleting plots
+    returnStatus = res_display_anim_clear()
+
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "res_display_anim_clear() returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF		
+
+	
+    returnStatus = res_display_tool_delete( "Fringe", "default_Fringe" )
+	IF ( returnStatus == ci_Display_Tool_Does_Not_Exist ) THEN returnStatus = 0
+	
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "res_display_tool_delete() returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF			
+	
+    returnStatus = res_display_tool_delete( "Deformation", "default_Deformation" )
+	IF ( returnStatus == ci_Display_Tool_Does_Not_Exist ) THEN returnStatus = 0	
+	
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "res_display_tool_delete() returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF	
+    
+    $ fringe
+    IF (fringe == "VM" || fringe == "MP" || fringe == "D") THEN
+        $ von mises
+        IF (fringe == "VM") THEN 
+			returnStatus = res_utl_clear_result()
+			IF ( returnStatus != 0 ) THEN
+				errorMsg = "res_utl_clear_result() returned an error, Return Status: " // str_from_integer(returnStatus)
+				errorLevel = vLogger.get_ci_ERROR()
+				vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+			   RETURN returnStatus	
+			END IF			
+			
+			
+            returnStatus = res_data_load_dbresult( 0, "Nodal", "Scalar", loadcase, subcase,  @
+                "Stress Invariants", "Von Mises", "(NON-LAYERED)", "", "AsIs", "DeriveAverage" @
+                , "All", "ShapeFunc")
+			IF ( returnStatus != 0 ) THEN
+				errorMsg = "res_data_load_dbresult() returned an error, Return Status: " // str_from_integer(returnStatus)
+				errorLevel = vLogger.get_ci_ERROR()
+				vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+			   RETURN returnStatus	
+			END IF				
+				
+        $ major principal
+        ELSE IF (fringe == "MP") THEN
+			returnStatus = res_utl_clear_result()
+			IF ( returnStatus != 0 ) THEN
+				errorMsg = "res_utl_clear_result() returned an error, Return Status: " // str_from_integer(returnStatus)
+				errorLevel = vLogger.get_ci_ERROR()
+				vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+			   RETURN returnStatus	
+			END IF				
+			
+            returnStatus = res_data_load_dbresult( 0, "Nodal", "Scalar", loadcase, subcase,  @
+                "Stress Invariants", "Major Principal", "(NON-LAYERED)", "", "AsIs",  @
+                "DeriveAverage", "All", "ShapeFunc")
+			IF ( returnStatus != 0 ) THEN
+				errorMsg = "res_data_load_dbresult() returned an error, Return Status: " // str_from_integer(returnStatus)
+				errorLevel = vLogger.get_ci_ERROR()
+				vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+			   RETURN returnStatus	
+			END IF					
+				
+        $ fringe displacements
+        ELSE IF (fringe == "D") THEN
+			returnStatus = res_utl_clear_result()
+			IF ( returnStatus != 0 ) THEN
+				errorMsg = "res_utl_clear_result() returned an error, Return Status: " // str_from_integer(returnStatus)
+				errorLevel = vLogger.get_ci_ERROR()
+				vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+			   RETURN returnStatus	
+			END IF				
+			
+            returnStatus = res_data_load_dbresult( 0, "Nodal", "Scalar", loadcase, subcase,  @
+                "Displacements", "Translational", "(NON-LAYERED)", "MAG", "AsIs", "", "", "",  @
+                "", 0. )
+			IF ( returnStatus != 0 ) THEN
+				errorMsg = "res_data_load_dbresult() returned an error, Return Status: " // str_from_integer(returnStatus)
+				errorLevel = vLogger.get_ci_ERROR()
+				vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+			   RETURN returnStatus	
+			END IF					
+        END IF
+        
+        returnStatus = res_data_title( 0, "Nodal", "Scalar", 1, [ @
+            "$POFF@@@$PT: @@@$LCN, @@@$SCN, @@@$PRN, @@@$SRN, @@@$DRVL, @@@$LN"] )
+		IF ( returnStatus != 0 ) THEN
+			errorMsg = "res_data_title() returned an error, Return Status: " // str_from_integer(returnStatus)
+			errorLevel = vLogger.get_ci_ERROR()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+		   RETURN returnStatus	
+		END IF				
+			
+        returnStatus = res_display_fringe_create( "", "FreeFaces", 0, [""], 12, [ @
+            "Range:Fri_default_Fringe", "RangeOverwrite:ON", "FringeStyle:Discrete/Smooth" @
+            , "Shade:None", "ElemEdge:FreeEdge,Blue,Solid,1", "Shrink:0",  @
+            "TitleDisplay:ON", "MinMaxDisplay:ON", "ValueDisplay:OFF", "Filter:None",  @
+            "ScaleFactor:1.", "LabelStyle:Exponential, 12, White, 3"], TRUE )
+		IF ( returnStatus != 0 ) THEN
+			errorMsg = "res_display_fringe_create() returned an error, Return Status: " // str_from_integer(returnStatus)
+			errorLevel = vLogger.get_ci_ERROR()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+		   RETURN returnStatus	
+		END IF				
+			
+        returnStatus = res_display_fringe_post( "", 0, "Nodal", TRUE, TRUE )
+		IF ( returnStatus != 0 ) THEN
+			errorMsg = "res_display_fringe_post() returned an error, Return Status: " // str_from_integer(returnStatus)
+			errorLevel = vLogger.get_ci_ERROR()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+		   RETURN returnStatus	
+		END IF			
+    END IF
+    
+    $ displacement, along with previous fringe
+    IF (deform == "D") THEN
+		returnStatus = res_utl_clear_result()
+		IF ( returnStatus != 0 ) THEN
+			errorMsg = "res_utl_clear_result() returned an error, Return Status: " // str_from_integer(returnStatus)
+			errorLevel = vLogger.get_ci_ERROR()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+		   RETURN returnStatus	
+		END IF			
+		
+        returnStatus = res_data_load_dbresult( 0, "Nodal", "Vector", loadcase, subcase,  @
+            "Displacements", "Translational", "(NON-LAYERED)", "", "AsIs", "", "", "", "", @
+            0. )
+		IF ( returnStatus != 0 ) THEN
+			errorMsg = "res_data_load_dbresult() returned an error, Return Status: " // str_from_integer(returnStatus)
+			errorLevel = vLogger.get_ci_ERROR()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+		   RETURN returnStatus	
+		END IF	
+		
+        returnStatus = res_data_title( 0, "Nodal", "Vector", 1, [ @
+            "$POFF@@@$PT: @@@$LCN, @@@$SCN, @@@$PRN, @@@$SRN, @@@$DRVL, @@@$LN"] )
+		IF ( returnStatus != 0 ) THEN
+			errorMsg = "res_data_title() returned an error, Return Status: " // str_from_integer(returnStatus)
+			errorLevel = vLogger.get_ci_ERROR()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+		   RETURN returnStatus	
+		END IF				
+			
+        returnStatus = res_display_deformation_create( "", "Elements", 0, [""], 9, [ @
+            "DeformedStyle:White,Solid,1,Wireframe", "DeformedScale:Model=0.1",  @
+            "UndeformedStyle:OFF,Blue,Solid,1,Wireframe", "TitleDisplay:ON",  @
+            "MinMaxDisplay:ON", "ScaleFactor:1.", "LabelStyle:Exponential, 12, White, 3",  @
+            "DeformDisplay:Resultant", "DeformComps:OFF,OFF,OFF"] )
+			
+		IF ( returnStatus != 0 ) THEN
+			errorMsg = "res_display_deformation_create() returned an error, Return Status: " // str_from_integer(returnStatus)
+			errorLevel = vLogger.get_ci_ERROR()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+		   RETURN returnStatus	
+		END IF		
+		
+        returnStatus = res_display_deformation_post( "", 0 )
+		IF ( returnStatus != 0 ) THEN
+			errorMsg = "res_display_deformation_post() returned an error, Return Status: " // str_from_integer(returnStatus)
+			errorLevel = vLogger.get_ci_ERROR()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+		   RETURN returnStatus	
+		END IF			
+		
+    END IF
+END FUNCTION
+################################################################################
+FUNCTION saveSpecificPNG( in_FileName, angle_x, angle_y, angle_z )
+
+	STRING in_FileName[]
+	REAL	angle_x
+	REAL	angle_y
+	REAL	angle_z	
+	
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".saveImage"	
+	
+	INTEGER returnStatus = 0	
+
+	returnStatus = ga_view_aa_set( angle_x, angle_y, angle_z )
+	
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "ga_view_aa_set() returned an error, Return Status: "// str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF			
+	
+	gu_fit_view(  )
+	# gu_fit_view returns 1, no documenation on this function
+    #returnStatus = gu_fit_view(  )
+	#IF ( returnStatus != 0 ) THEN
+	#	errorMsg = "gu_fit_view() returned an error, Return Status: "// str_from_integer(returnStatus)
+	#	errorLevel = vLogger.get_ci_ERROR()
+	#	vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	#  RETURN returnStatus	
+	#END IF			
+	
+	
+	gm_write_image( "PNG", in_FileName, "Overwrite", 0., 0., 1., 1., 0, "Viewport" )	
+	# gm_write_image returns 1, no documenation on this function
+	#returnStatus = gm_write_image( "PNG", in_FileName, "Overwrite", 0., 0., 1., 1., 0, "Viewport" )	
+	#IF ( returnStatus != 0 ) THEN
+	#	errorMsg = "gm_write_image() returned an error, Return Status: "// str_from_integer(returnStatus)
+	#	errorLevel = vLogger.get_ci_ERROR()
+	#	vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	#  RETURN returnStatus	
+	#END IF			
+	
+	RETURN returnStatus
+END FUNCTION
+################################################################################
+$ filename without file extension
+$ generates png files
+FUNCTION saveImage(fname)
+    STRING fname[]
+    GLOBAL REAL defWidth
+    GLOBAL REAL defHeight
+    
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".saveImage"	
+	
+	INTEGER returnStatus = 0
+	
+#    res_display_anim_clear( )
+    returnStatus = ga_viewport_size_set( "default_viewport", defWidth, defHeight, 1 )   
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "ga_viewport_size_set() returned an error, Return Status: "// str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF		    
+    
+	returnStatus = vPostProcessing.saveSpecificPNG( fname // "_front" // ".png", 0., 0., 0.)
+	IF ( returnStatus != 0 ) THEN RETURN returnStatus
+		
+	returnStatus = vPostProcessing.saveSpecificPNG(fname // "_rear" // ".png", 0., 180., 0. )
+	IF ( returnStatus != 0 ) THEN RETURN returnStatus
+			
+	returnStatus = vPostProcessing.saveSpecificPNG(fname // "_top" // ".png", 90., 0., 0. )
+	IF ( returnStatus != 0 ) THEN RETURN returnStatus
+		    
+	returnStatus = vPostProcessing.saveSpecificPNG( fname // "_bottom" // ".png", -90., 0., 0.)
+	IF ( returnStatus != 0 ) THEN RETURN returnStatus
+		
+	returnStatus = vPostProcessing.saveSpecificPNG(fname // "_left" // ".png", 180., 90., 180.)
+	IF ( returnStatus != 0 ) THEN RETURN returnStatus
+		   	
+	returnStatus = vPostProcessing.saveSpecificPNG(fname // "_right" // ".png", 180., -90., 180.)
+	IF ( returnStatus != 0 ) THEN RETURN returnStatus
+    
+	returnStatus = vPostProcessing.saveSpecificPNG(fname // "_iso_1" // ".png", 23., -34., 0.)
+	IF ( returnStatus != 0 ) THEN RETURN returnStatus
+		    
+	returnStatus = vPostProcessing.saveSpecificPNG(fname // "_iso_2" // ".png", 23., 56., 0.)
+	IF ( returnStatus != 0 ) THEN RETURN returnStatus
+		    
+	returnStatus = vPostProcessing.saveSpecificPNG(fname // "_iso_3" // ".png", -67., 0., -34. )
+	IF ( returnStatus != 0 ) THEN RETURN returnStatus
+    
+	returnStatus = vPostProcessing.saveSpecificPNG(fname // "_iso_4" // ".png", 157., 34., -180.)
+	IF ( returnStatus != 0 ) THEN RETURN returnStatus
+			
+	RETURN returnStatus
+	
+END FUNCTION
+################################################################################
+$ frames is number per take (one play from start to finish)
+$ playRepeat is number of takes (number of start to finish plays in a row)
+$ delay is milliseconds between frames
+$ reasonable values: frames = 10, playRepeat = 3, delay = 10
+$ generates mpeg file
+FUNCTION createAnimation(filename, frames, playRepeat, delay)
+    STRING filename[]
+    INTEGER frames
+    INTEGER playRepeat
+    INTEGER delay
+    INTEGER endAnim
+    
+    res_display_anim_clear( )
+    set_cur_win4msmpeg(  )
+    gu_fit_view(  )
+    
+    res_display_tool_animate_scale( "Modal", "Fringe", "default_Fringe", 1.4141999 )
+    res_display_anim_setup_2d( frames, "Linear", "./animations" )
+    res_display_tool_animate_scale( "Modal", "Deformation", "default_Deformation", 1.4141999 )
+    res_display_anim_setup_2d( frames, "Linear", "./animations" )
+    res_display_anim_run( delay )
+    endAnim = gm_mpeg_start_recording( "./" // filename // ".mpg", "Overwrite", @
+        0., 0., 1., 1., 90,  frames * playRepeat)
+END FUNCTION
+################################################################################
+FUNCTION getALLPlots(filename)
+
+	INTEGER frames = 10, playTimes = 3, delay = 10	
+	INTEGER a,b
+	STRING f[4]
+	STRING filename[]
+	INTEGER   nrc, lcids(virtual), nsub(virtual)
+	STRING   l_title[64]
+	STRING   sub_title[64]
+
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".getALLPlots"	
+	
+	INTEGER returnStatus = 0	
+	
+	returnStatus = res_utl_get_loadcases(nrc, lcids, nsub)
+	
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "res_utl_get_loadcases() returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF			
+	
+	FOR (a = 1 TO nrc)
+		FOR (b = 1 TO nsub(a))
+			returnStatus = db_get_load_case_title(lcids(a), l_title)
+			IF ( returnStatus != 0 ) THEN
+				errorMsg = "db_get_load_case_title() returned an error, Return Status: " // str_from_integer(returnStatus)
+				errorLevel = vLogger.get_ci_ERROR()
+				vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+			   RETURN returnStatus	
+			END IF			
+			
+			returnStatus = db_get_sub_case_title(lcids(a), b, sub_title)
+			IF ( returnStatus != 0 ) THEN
+				errorMsg = "db_get_sub_case_title() returned an error, Return Status: " // str_from_integer(returnStatus)
+				errorLevel = vLogger.get_ci_ERROR()
+				vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+			   RETURN returnStatus	
+			END IF					
+			
+#			LIST (f = "VM", "MP", "D")
+			LIST (f = "VM", "D")
+				#dump l_title 
+				#dump sub_title 
+				#dump f	 
+				vPostProcessing.createPlot(l_title, sub_title, f, "")			
+				vPostProcessing.saveImage(filename // "_" // f)
+#				createAnimation(filename // "_" // f, frames, playTimes, delay)
+				
+				IF (f == "D") THEN
+					vPostProcessing.createPlot(l_title, sub_title, f, "D")
+					vPostProcessing.saveImage(filename // "_" // f // "_" // "D")
+#					createAnimation(filename // "_" // f //  "_" // "D", frames, playTimes, delay)
+				END IF
+				
+			END LIST
+		END FOR		
+	END FOR
+
+	RETURN returnStatus
+	
+END FUNCTION
+################################################################################
+$---------------------------------------------------------------------------------------------------------------------------
+$Rest of the functions: accessing database info ex. getting parts nodes and elements, names of all load cases, getting subcase id, etc
+$---------------------------------------------------------------------------------------------------------------------------
+
+$returns array of all load case names
+FUNCTION getAllLoadCases(lcnames)
+    INTEGER ncases
+    INTEGER lcids(VIRTUAL)
+    INTEGER nsub(VIRTUAL)
+    STRING lcnames[]()
+    INTEGER i
+    res_utl_get_loadcases(ncases, lcids, nsub)
+    
+    SYS_ALLOCATE_ARRAY(lcnames, 1, ncases)
+    FOR (i = 1 TO ncases)
+        db_get_load_case_title(lcids(i), lcnames(i))
+    END FOR
+    RETURN lcnames
+END FUNCTION
+################################################################################
+$returns load case id
+FUNCTION getLoadCaseID(loadcase)
+    STRING loadcase[]
+    INTEGER loadID
+    db_get_load_case_id(loadcase, loadID)
+    RETURN loadID
+END FUNCTION
+################################################################################
+$returns list of all subcase names of a load case
+FUNCTION getAllSubCases(loadcase)
+    STRING loadcase[]
+    INTEGER nsub
+    INTEGER subids(VIRTUAL)
+    STRING subnames[31](VIRTUAL)
+    INTEGER i
+    res_utl_get_subcases(getLoadCaseID(loadcase), nsub, subids)
+    
+    SYS_ALLOCATE_ARRAY(subnames, 1, nsub)
+    FOR (i = 1 TO nsub)
+        db_get_sub_case_title(getLoadCaseID(loadcase), subids(i), subnames(i))
+    END FOR
+    RETURN subnames
+END FUNCTION
+################################################################################
+$returns subcase id
+FUNCTION getSubCaseID(loadcase, subcase)
+    STRING loadcase[]
+    STRING subcase[]
+    INTEGER subid
+    db_get_sub_case_id(getLoadCaseID(loadcase), subcase, subid)
+    RETURN subid
+END FUNCTION    
+################################################################################
+$returns list of all layer names of a subcase of a load case
+FUNCTION getAllLayers(loadcase, subcase, factor)
+    STRING loadcase[]
+    STRING subcase[]
+    STRING factor[]
+    INTEGER result_ids(4)
+    INTEGER primaryID
+    INTEGER secondaryID
+    INTEGER   nlayers, layerids(VIRTUAL)
+    STRING    layerlabels[80](VIRTUAL)
+    
+    result_ids(1) = getLoadCaseID(loadcase)
+    result_ids(2) = getSubCaseID(loadcase, subcase)
+    getFactorIDs(factor, primaryID, secondaryID)
+    result_ids(3) = primaryID
+    result_ids(4) = secondaryID
+    res_utl_get_result_layers(result_ids, nlayers, layerids, layerlabels)
+    RETURN layerlabels
+END FUNCTION
+################################################################################
+$returns layer id
+FUNCTION getLayerID(loadcase, subcase, factor, layer)
+    STRING loadcase[]
+    STRING subcase[]
+    STRING factor[]
+    STRING layer[]
+    INTEGER result_ids(4)
+    INTEGER primaryID
+    INTEGER secondaryID
+    INTEGER   nlayers, layerids(VIRTUAL)
+    STRING    layerlabels[80](VIRTUAL)
+    INTEGER i
+    
+    result_ids(1) = getLoadCaseID(loadcase)
+    result_ids(2) = getSubCaseID(loadcase, subcase)
+    getFactorIDs(factor, primaryID, secondaryID)
+    result_ids(3) = primaryID
+    result_ids(4) = secondaryID
+    res_utl_get_result_layers(result_ids, nlayers, layerids, layerlabels)
+    
+    FOR (i=1 TO nlayers)
+        IF (layerlabels(i) == layer) THEN
+            RETURN layerids(i)
+        END IF
+    END FOR
+    
+    RETURN 0
+END FUNCTION
+################################################################################
+$ assign primaryID and secondaryID values
+FUNCTION getFactorIDs(factor, primaryID, secondaryID)
+    STRING factor[]
+    INTEGER primaryID
+    INTEGER secondaryID
+    
+    IF (factor == "VM") THEN 
+        db_get_primary_res_id("Stress Invariants", primaryID)
+        db_get_secondary_res_id(primaryID,"Von Mises", secondaryID)
+    ELSE IF (factor == "MP") THEN
+        db_get_primary_res_id("Stress Invariants", primaryID)
+        db_get_secondary_res_id(primaryID,"Major Principal", secondaryID)
+    ELSE IF (factor == "D") THEN
+        db_get_primary_res_id("Displacements", primaryID)
+        db_get_secondary_res_id(primaryID,"Translational", secondaryID)
+    ELSE
+        primaryID = 0
+        secondaryID = 0
+    END IF
+END FUNCTION
+################################################################################
+$ returns list of part ids (ie regions/property sets) in model
+FUNCTION getAllPartIDs(ids)
+    INTEGER num
+    INTEGER ids()
+    
+	INTEGER returnStatus = 0	
+	
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".getAllPartIDs"		
+	
+    returnStatus = db_count_region_ids(num)
+	
+    IF ( returnStatus != 0 ) THEN
+		errorMsg = "db_count_region_ids(num) returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+        RETURN returnStatus	
+    END IF	
+	
+	text_write_string ( vLogger.getChannel(), "" )
+	text_write_string ( vLogger.getChannel(), "Number of Regions: " // str_from_integer(num))	
+	
+	SYS_ALLOCATE_ARRAY (ids, 1, num)
+	
+    returnStatus = db_get_all_region_ids(num, ids)
+    IF ( returnStatus != 0 ) THEN
+		errorMsg = "db_get_all_region_ids(num, ids) returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+        RETURN returnStatus	
+    END IF		
+	
+	INTEGER i
+	text_write_string ( vLogger.getChannel(), "Region IDs" )	
+	FOR ( i = 1 To num)
+			text_write_string ( vLogger.getChannel(), "   " // str_from_integer(ids(i)))	
+	END FOR
+	
+
+	RETURN returnStatus
+END FUNCTION
+################################################################################
+$ assign elemList and nodeList strings values describing all elements and nodes of a part (ie region/property set)
+FUNCTION getPartElemNodes(ID, elemList, nodeList)
+    INTEGER ID
+    STRING set_name[32]
+    INTEGER gener_elem_type
+    INTEGER dof_set_flag 
+    INTEGER condense_flag
+    INTEGER geom_flag
+    INTEGER form_flag 
+    INTEGER lam_flag 
+    INTEGER layer_count
+    INTEGER material_id
+    INTEGER material_lin 
+    INTEGER material_dir
+    STRING   properties_list[32](1)
+    STRING elemList[]
+    STRING nodeList[]
+    
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".getPartElemNodes"	
+	
+	INTEGER returnStatus = 0	
+	
+    returnStatus = db_get_region_definition(ID, set_name, gener_elem_type, @
+        dof_set_flag, condense_flag, geom_flag, @
+        form_flag, lam_flag, layer_count, material_id, @
+        material_lin, material_dir)
+        
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "db_get_region_definition() returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF			
+
+    properties_list(1) = set_name
+	
+    returnStatus = list_create_elem_att_prop( 0, properties_list, 1, "lista", elemList)
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "list_create_elem_att_prop() returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF			
+	
+    returnStatus = list_create_node_ass_elem( elemList, "listb", nodeList)
+	
+	IF ( returnStatus != 0 ) THEN
+		errorMsg = "list_create_node_ass_elem() returned an error, Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage( errorLevel, functionName, errorMsg ) 
+	   RETURN returnStatus	
+	END IF		
+	
+	RETURN returnStatus
+END FUNCTION
+################################################################################
+$ returns part's (ie region/property set) name
+FUNCTION getPartName(partID)
+    INTEGER partID
+    STRING set_name[32]
+    INTEGER gener_elem_type
+    INTEGER dof_set_flag
+    INTEGER condense_flag
+    INTEGER geom_flag
+    INTEGER form_flag
+    INTEGER lam_flag
+    INTEGER layer_count
+    INTEGER material_id
+    INTEGER material_lin
+    INTEGER material_dir
+
+    db_get_region_definition(partID,  set_name, gener_elem_type, dof_set_flag, condense_flag, geom_flag, form_flag, lam_flag, layer_count, material_id, material_lin, material_dir)
+    RETURN set_name
+END FUNCTION
+END CLASS
+################################################################################
+################################################################################
+##########################
+# Logger Class
+###########################
+CLASS vLogger
+
+	CLASSWIDE STRING	c_ClassName[32]	
+
+	CLASSWIDE INTEGER 	errorMessages_maxCount,		@
+						errorMessages_current,		@
+						channel
+	
+	CLASSWIDE INTEGER   ci_MaxMessageLength 
+	
+	CLASSWIDE STRING errorMessages[512](Virtual)	
+
+	CLASSWIDE STRING 	c_ERROR[32],				@
+						c_WARNING[32],				@
+						c_INFORMATION[32]				
+
+	CLASSWIDE INTEGER 	ci_ERROR,					@
+						ci_WARNING,					@
+						ci_INFORMATION					
+						
+				
+	CLASSWIDE STRING  errorMsg[1024] 
+	CLASSWIDE INTEGER errorLevel					
+				
+################################################################################
+# Note:  If the log file does not open properly, the messages will be written to the session log file (e.g. Patran_Model_Session.log) 
+# 		 patran -b -graphics -sfp  Patran_Model.ses -stdout Patran_Model_log.txt
+FUNCTION initialize(in_log_DirAndFileName)
+
+	c_ClassName = "vLogger"
+
+	ci_MaxMessageLength = 512
+	
+	STRING in_Log_DirAndFileName[]
+
+	errorMessages_maxCount = 100
+	errorMessages_current = 0
+	channel = 0
+	c_ERROR = 						"ERROR"
+	c_WARNING = 					"WARN"
+	c_INFORMATION =					"INFO"	
+	
+	ci_ERROR =			1
+	ci_WARNING =		2	
+	ci_INFORMATION	=	3	
+	
+	sys_allocate_array(errorMessages, 1, errorMessages_maxCount)
+		
+	STRING  functionName[64]
+	functionName = c_ClassName // ".initialize"	
+	
+	INTEGER returnStatus = 0
+	
+	IF (file_exists(in_Log_DirAndFileName,"" )) THEN
+		file_delete(in_Log_DirAndFileName) 
+	End IF
+
+	IF (in_log_DirAndFileName != "") THEN
+		# If the log file does not open properly, the messages will be written to the session log file (e.g. Patran_Model_Session.log)
+		# patran -b -graphics -sfp  Patran_Model.ses -stdout Patran_Model_log.txt
+		returnStatus = text_open( in_log_DirAndFileName, "NOW", 0, 0, channel )		
+		IF ( returnStatus != 0 ) THEN 
+			errorMsg = "Could not open log file: " // in_log_DirAndFileName // ", Logging to session log file"
+			errorLevel = vLogger.get_ci_WARNING()
+			vLogger.addErrorMessage(  errorLevel, functionName, errorMsg )								
+			# c_WARNING non fatal, set returnStatus = 0 
+			returnStatus = 0  
+		END IF
+	END IF		
+	
+END FUNCTION
+################################################################################
+FUNCTION getChannel()
+	return channel
+END FUNCTION
+################################################################################
+FUNCTION get_ci_ERROR()
+	return ci_ERROR
+END FUNCTION
+################################################################################	
+FUNCTION get_ci_WARNING()
+	return ci_WARNING
+END FUNCTION	
+################################################################################
+FUNCTION get_ci_INFORMATION()
+	return ci_INFORMATION
+END FUNCTION
+################################################################################
+FUNCTION getErrorMessages_current()
+	return errorMessages_current
+END FUNCTION
+################################################################################
+FUNCTION getErrorMessage(i)
+	INTEGER i
+	return errorMessages(i)
+END FUNCTION
+################################################################################
+#FUNCTION addErrorMessage( in_Message) 
+#
+#	STRING 	in_Message[]
+#		
+#	if ( (errorMessages_current + 1) <= errorMessages_maxCount ) THEN 
+#		errorMessages_current += 1
+#		errorMessages(errorMessages_current) = in_Message
+#	END IF
+#											
+#END FUNCTION
+################################################################################
+FUNCTION addErrorMessage( in_Error_Level, in_Function, in_Msg ) 
+
+	INTEGER in_Error_Level
+	STRING 	in_Function[]	
+	STRING 	in_Msg[]
+		
+	if ( (errorMessages_current + 1) <= errorMessages_maxCount ) THEN 
+		errorMessages_current += 1
+		errorMessages(errorMessages_current) = vLogger.formatErrorMessage( in_Error_Level, in_Function, in_Msg ) 
+	END IF
+											
+END FUNCTION
+################################################################################
+FUNCTION formatErrorMessage( in_Error_Level, in_Function, in_Msg )
+	INTEGER in_Error_Level
+	#STRING	in_Error_Level[]
+	STRING 	in_Function[]	
+	STRING 	in_Msg[]
+	
+	STRING msg[2048]
+
+	STRING error_Level[32]
+	
+	SWITCH ( in_Error_Level )
+		CASE ( ci_ERROR)
+			error_Level = c_ERROR
+		CASE ( ci_WARNING)
+			error_Level = c_WARNING
+		CASE ( ci_INFORMATION)
+			error_Level = c_INFORMATION	
+	END SWITCH
+
+	msg = error_Level // ", Function: " //  in_Function // ", Message: " //in_Msg
+	
+	IF ( str_length(msg) > (ci_MaxMessageLength - 1 )) THEN msg = str_substr(msg,1, (ci_MaxMessageLength - 1 )) 
+
+    return msg
+END FUNCTION 
+################################################################################
+FUNCTION closeLogFile()
+
+	text_close(channel,"")
+
+END FUNCTION
+################################################################################
+FUNCTION destruct()
+
+	sys_free_array ( errorMessages )
+
+END FUNCTION
+
+END CLASS
+################################################################################
+################################################################################
+###########################
+# vPatranUtils Class
+###########################
+CLASS vPatranUtils
+				
+	CLASSWIDE STRING	c_ClassName[32]			
+				
+	CLASSWIDE STRING  errorMsg[1024] 
+	CLASSWIDE INTEGER errorLevel				
+################################################################################
+FUNCTION initialize()
+	c_ClassName = "vPatranUtils"
+	
+END FUNCTION
+################################################################################
+FUNCTION createPatranDB(	in_File_Patran_Model_Name, 	in_File_Patran_Model_Dir )
+				
+				
+	# If the Patran DB exists, this function will not overwrite it
+    STRING 	in_File_Patran_Model_Name[]
+    STRING 	in_File_Patran_Model_Dir[]
+
+	INTEGER returnStatus = 0;
+
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".createPatranDB"		
+	
+	# If DB open, close it.  No DBs should be open.  Put this here in case this function is reused elsewhere.
+    uil_file_close.go(  )		
+	
+	STRING db_Path_Name[512]
+	IF ( in_File_Patran_Model_Dir == ".\" ) THEN
+		db_Path_Name = in_File_Patran_Model_Dir // in_File_Patran_Model_Name // ".db"
+	ELSE
+		db_Path_Name = in_File_Patran_Model_Dir // "\" // in_File_Patran_Model_Name // ".db"
+	END IF
+	
+	
+	returnStatus = uil_file_new.go( "", db_Path_Name )
+	
+    IF ( returnStatus != 0 ) THEN
+		errorMsg = "Could not create DB (uil_file_new.go), DB: " // in_File_Patran_Model_Dir // "\" // in_File_Patran_Model_Name// ", Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg ) 
+        RETURN returnStatus	
+    END IF		
+	
+	text_write_string( vLogger.getChannel(), "Created Patran DB: " // db_Path_Name)	
+	
+    RETURN returnStatus
+
+END FUNCTION	
+###############################################################################	
+FUNCTION setPatranWorkingDir (	in_File_Patran_Model_Dir )
+												
+    STRING 	in_File_Patran_Model_Dir[]
+	
+	INTEGER returnStatus = 0;
+
+	STRING  functionName[64] 
+	functionName = c_ClassName // ".setPatranWorkingDir"		
+	
+    returnStatus = set_current_dir( in_File_Patran_Model_Dir )	
+ 	
+    IF ( returnStatus != 0 ) THEN
+		errorMsg = "Could not set Patran working directory, Dir: " // in_File_Patran_Model_Dir // ", Return Status: " // str_from_integer(returnStatus)
+		errorLevel = vLogger.get_ci_ERROR()
+		vLogger.addErrorMessage(  errorLevel, functionName, errorMsg )
+        RETURN returnStatus	
+    END IF		
+	
+	text_write_string( vLogger.getChannel(), "Set Patran working directory: " // in_File_Patran_Model_Dir) 		
+	
+    RETURN returnStatus
+
+END FUNCTION	
+
+END CLASS
+

@@ -7,9 +7,15 @@ import string
 import shutil
 import logging
 import datetime
+import inspect
 import cad_library
 
 print_cmds = True
+
+
+def get_function_name():
+    function_name = inspect.currentframe().f_back
+    return function_name
 
 
 class CADJobDriver():
@@ -140,6 +146,7 @@ class CADJobDriver():
                 'Cannot find CADCreoParametricCreateAssembly.exe. Do you have the META toolchain installed properly?', -1)
 
         #logdir = os.path.join(workdir,'log')
+
         result = os.system('\"' + create_asm + '" -i CADAssembly.xml')
 
         return result
@@ -236,6 +243,7 @@ class CADJobDriver():
         )
 
         cpif_result = self.call_subprocess(sys.executable + python_command)
+        # cpif_result = self.popen_subprocess(sys.executable + python_command, "CreatePatranInput")
 
         if cpif_result != 0:
             if cpif_result == 99:
@@ -271,16 +279,17 @@ class CADJobDriver():
             self.logger.error(msg)
             cad_library.exitwitherror(msg, -1)
 
-        pcl_command = "patran -b -graphics -sfp  {} -stdout CreatePatranModel_Session.log".format(ses_name)
+        pcl_command = "patran -b -graphics -sfp {} -stdout CreatePatranModel_Session.log".format(ses_name)
 
         with open('RunPatranNastran.cmd', 'wb') as cmd_file_out:
             cmd_file_out.write(pcl_command)
 
+        if os.path.exists(pcl_input_name) and os.path.exists(pcl_name) and os.path.exists(ses_path):
+            patran_nastran_result = self.call_subprocess(pcl_command)
+            # patran_nastran_result = self.popen_subprocess(pcl_command, 'CreatePatranModel')
+
         self.logger.info("Skipping Post-Processing")
 
-        # if os.path.exists(pcl_input_name) and os.path.exists(pcl_name) and os.path.exists(ses_path):
-        #     patran_nastran_result = self.call_subprocess(pcl_command)
-        #
         #     if patran_nastran_result != 0:
         #         msg = "Patran/Nastran failed in {}: '{}'".format(patran_nastran_dir, pcl_command)
         #
@@ -326,6 +335,44 @@ class CADJobDriver():
         # else:
         #     msg = "Could not find {}, {}, or {}.".format(pcl_input_name, pcl_name, ses_path)
         #     cad_library.exitwitherror(msg, -1)
+
+    def popen_subprocess(self, command, log_name_no_extension=None):
+
+        subprocess_command = command
+        working_dir = os.getcwd()
+        time_stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        if log_name_no_extension is None:
+            log_file_name = "()_{}.txt".format(get_function_name(), time_stamp)
+        else:
+            log_file_name = "{}_{}.txt".format(log_name_no_extension, time_stamp)
+
+        self.logger.info("Calling {} from working directory {}...".format(subprocess_command, working_dir))
+
+        if not os.path.exists('log'):
+            os.makedirs('log')
+
+        return_code = -42
+
+        with open(os.path.join('log', log_file_name), 'wb') as lims_log:
+            subprocess_popen = subprocess.Popen(subprocess_command, stdout=lims_log, cwd=working_dir)
+            # subprocess_popen = subprocess.Popen(subprocess_command, stdout=subprocess.PIPE, cwd=working_dir)
+
+            # subprocess_log = ""
+            # for line in subprocess_popen.stdout:
+            #     subprocess_log += line + '\n'
+
+            subprocess_popen.wait()
+            lims_log.flush()
+            return_code = subprocess_popen.returncode
+
+            # lims_log.writelines(subprocess_log)
+
+        if return_code != 0:
+            msg = "Subprocess.Popen {} failed: {}".format(subprocess_command, subprocess_popen.returncode)
+            self.logger.error(msg)
+
+        return return_code
 
     def run_nastran(self):
         os.chdir(os.getcwd() + '\\Analysis\\Nastran')

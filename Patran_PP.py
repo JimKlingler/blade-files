@@ -19,6 +19,7 @@ def recurselist(component, componentList):
             else:
                 component.MetricsInfo = comp.MetricsInfo
 
+
 def ParseOutFile(outfilename, gComponentList):
     ##Format##
     mtype = 0
@@ -38,19 +39,72 @@ def ParseOutFile(outfilename, gComponentList):
 
 class Patran_PostProcess:
 
-    def __init__(self, args, patran_path):
-        self._args = args
-        self._logger = logging.getLogger('root.Patran_PostProcess')
-        filename = args.xdb_filename.split(".")[0]
+    def __init__(self,
+                 nas_filename,
+                 xdb_filename,
+                 meta_data_file,
+                 requested_metrics,
+                 results_json):
+
+        self.logger = None
+        self.get_logger()
+
+        if not os.path.exists(nas_filename):
+            msg = "File not found: {}".format(nas_filename)
+            self.logger.warning(msg)
+
+        self.nas_filename = nas_filename
+
+        if not os.path.exists(xdb_filename):
+            msg = "File not found: {}".format(xdb_filename)
+            self.logger.warning(msg)
+
+        self.xdb_filename = xdb_filename
+
+        if not os.path.exists(meta_data_file):
+            msg = "File not found: {}".format(meta_data_file)
+            self.logger.warning(msg)
+
+        self.meta_data_file = meta_data_file
+
+        if not os.path.exists(requested_metrics):
+            msg = "File not found: {}".format(requested_metrics)
+            self.logger.warning(msg)
+
+        self.requested_metrics = requested_metrics
+
+        if not os.path.exists(results_json):
+            msg = "File not found: {}".format(results_json)
+            self.logger.warning(msg)
+
+        self.results_json = results_json
+
+        filename = xdb_filename.split(".")[0]
         self._filename = filename.replace("_nas_mod","")
-        self._lib_file_name = 'patran_pp.pcl'
         self._bdf_file_name = filename + ".bdf"
 
-        if args.nas_filename != self._bdf_file_name:
-            shutil.copy2(args.nas_filename, self._bdf_file_name)
+        if nas_filename != self._bdf_file_name:
+            shutil.copy2(nas_filename, self._bdf_file_name)
 
-        self._xdb_file_name = args.xdb_filename
-        self._patran_path = patran_path
+        self._xdb_file_name = xdb_filename
+        self._lib_file_name = 'patran_pp.pcl'
+
+        self.meta_bin_cad = None
+        self.pp_pcl_path = None
+        self.PATRAN_PATH = None
+        self.LATEST_PATRAN_VERSION = None
+
+        self.get_paths_from_keys()
+
+    def get_logger(self):
+
+        self.logger = logging.getLogger('Patran_PostProcess')
+        handler = logging.FileHandler('PostProcess_Log.txt', 'w')
+        formatter = logging.Formatter(
+            '%(asctime)s %(name)-12s %(levelname)-8s %(message)s')
+        handler.setFormatter(formatter)
+        self.logger.addHandler(handler)
+        self.logger.setLevel(logging.DEBUG)
 
     def pre_process_cleanup(self):
         db_name = self._filename + ".db"
@@ -62,7 +116,7 @@ class Patran_PostProcess:
             os.remove(out_txt_name)
 
     def create_session_file(self):
-        logger.debug("Filename: {}".format(self._filename))
+        self.logger.debug("Filename: {}".format(self._filename))
 
         new_line = '\n'
 
@@ -86,24 +140,24 @@ class Patran_PostProcess:
         retcode = call(patran_call, shell=True)
 
         if retcode == 0:
-            logger.info("Patran Process Successful!!")
+            self.logger.info("Patran Process Successful!!")
         else:
             status = False
-            logger.error("Patran Process Failed!")
+            self.logger.error("Patran Process Failed!")
 
         return status
 
     def update_results_files(self):
         status = True
-        gComponentList = ComputedMetricsSummary.ParseMetaDataFile(args.MetaDataFile, None, None)
+        gComponentList = ComputedMetricsSummary.ParseMetaDataFile(self.meta_data_file, None, None)
 
         if not os.path.exists(self._filename + "_out.txt"):
             msg = "File not found: {}".format(self._filename + "_out.txt")
-            logger.error(msg)
+            self.logger.error(msg)
             
 
         ParseOutFile(self._filename + "_out.txt", gComponentList)
-        reqMetrics = ComputedMetricsSummary.ParseReqMetricsFile(args.RequestedMetrics, gComponentList)
+        reqMetrics = ComputedMetricsSummary.ParseReqMetricsFile(self.requested_metrics, gComponentList)
         
         for component in gComponentList.values():
             recurselist(component, gComponentList)
@@ -113,7 +167,7 @@ class Patran_PostProcess:
                 if component.ComponentID in comp.Children and not comp.IsConfigurationID:
                     # component is actually a child, so parent's metric data
                     # should be updated - provided that child metrics are larger
-                    logger.debug(comp)
+                    self.logger.debug(comp)
                     if 'FactorOfSafety' in component.MetricsInfo:
                         component.MetricsInfo['FactorOfSafety'] = comp.MetricsInfo['FactorOfSafety']
                     if 'VonMisesStress' in component.MetricsInfo:
@@ -141,9 +195,9 @@ class Patran_PostProcess:
                     
         ################  Populate Assembly Results  #########
         for component in gComponentList.values():
-            logger.info('ComponentID: {}'.format(component.ComponentID))
-            logger.info(component)
-            logger.info('')
+            self.logger.info('ComponentID: {}'.format(component.ComponentID))
+            self.logger.info(component)
+            self.logger.info('')
             if component.CadType == "ASSEMBLY" and not component.IsConfigurationID:
                 FOS = []
                 VM = []
@@ -160,26 +214,68 @@ class Patran_PostProcess:
         computedValuesXml = ComputedMetricsSummary.WriteXMLFile(gComponentList)
         
         ################  Update Results Json  ##############
-        if os.path.exists(args.ResultsJson):
-            UpdateReportJson_CAD.update_manifest(args.ResultsJson, computedValuesXml)
+        if os.path.exists(self.results_json):
+            UpdateReportJson_CAD.update_manifest(self.results_json, computedValuesXml)
         else:
-            logger.error("Could not update file: {}, file does not exist.".format(args.ResultsJson))
+            self.logger.error("Could not update file: {}, file does not exist.".format(self.results_json))
             status = False
 
-        logger.info("Post Processing Complete, CSV and metrics updated")
+        self.logger.info("Post Processing Complete, CSV and metrics updated")
 
         return status
 
+    def get_paths_from_keys(self):
+
+        with _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE,
+                             r'Software\META',
+                             0,
+                             _winreg.KEY_READ | _winreg.KEY_WOW64_32KEY) as key:
+
+            META_PATH = _winreg.QueryValueEx(key, 'META_PATH')[0]
+            self.meta_bin_cad = os.path.join(META_PATH, 'bin', 'CAD')
+
+        with _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE,
+                             r'Software\Wow6432Node\MSC.Software Corporation\Patran x64\Latest',
+                             0,
+                             _winreg.KEY_READ | _winreg.KEY_WOW64_32KEY) as key:
+
+            self.LATEST_PATRAN_VERSION = _winreg.QueryValueEx(key, '')[0]
+
+        with _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE,
+                             r'Software\Wow6432Node\MSC.Software Corporation\Patran x64\\' + self.LATEST_PATRAN_VERSION,
+                             0,
+                             _winreg.KEY_READ | _winreg.KEY_WOW64_32KEY) as key:
+
+            self.PATRAN_PATH = _winreg.QueryValueEx(key, 'Path')[0]
+
+        self.pp_pcl_path = os.path.join(self.meta_bin_cad, self._lib_file_name)
+
+
+    def main(self):
+
+        if not os.path.exists(self.pp_pcl_path):
+            msg = "File not found in Meta-Tools installation: {}".format(self.pp_pcl_path)
+            self.logger.error(msg)
+            sys.exit(1)
+
+        shutil.copy2(self.pp_pcl_path, os.getcwd())
+
+        success = self.run_patran()
+
+        if not success:
+            msg = "post_process.run_patran() returned false"
+            self.logger.error(msg)
+            sys.exit(1)
+
+        success = self.update_results_files()
+
+        if not success:
+            msg = "post_process.update_results_files() returned false"
+            self.logger.error(msg)
+            sys.exit(1)
+
 
 if __name__ == '__main__':
-
-    logger = logging.getLogger('root.Patran_PostProcess')
-    handler = logging.FileHandler('PostProcess_Log.txt', 'w')
-    formatter = logging.Formatter(
-        '%(asctime)s %(name)-12s %(levelname)-8s %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
 
     try:
         parser = argparse.ArgumentParser(description='Post process Nastran output w/ Patran')
@@ -190,72 +286,19 @@ if __name__ == '__main__':
         parser.add_argument('ResultsJson', help='.json summary testresults File name')
         args = parser.parse_args()
 
-        if not os.path.exists(args.nas_filename):
-            msg = "File not found: {}".format(args.nas_filename)
-            logger.error(msg)
+        post_process = Patran_PostProcess(args.nas_filename,
+                                          args.xdb_filename,
+                                          args.MetaDataFile,
+                                          args.RequestedMetrics,
+                                          args.ResultsJson)
 
-        if not os.path.exists(args.xdb_filename):
-            msg = "File not found: {}".format(args.xdb_filename)
-            logger.error(msg)
+        post_process.main()
 
-        if not os.path.exists(args.MetaDataFile):
-            msg = "File not found: {}".format(args.MetaDataFile)
-            logger.error(msg)
-
-        if not os.path.exists(args.RequestedMetrics):
-            msg = "File not found: {}".format(args.RequestedMetrics)
-            logger.error(msg)
-
-        with _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE,
-                             r'Software\META',
-                             0,
-                             _winreg.KEY_READ | _winreg.KEY_WOW64_32KEY) as key:
-            META_PATH = _winreg.QueryValueEx(key, 'META_PATH')[0]
-
-        ppDir = os.path.join(META_PATH, 'bin', 'CAD')
-
-        with _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE,
-                             r'Software\Wow6432Node\MSC.Software Corporation\Patran x64\Latest',
-                             0,
-                             _winreg.KEY_READ | _winreg.KEY_WOW64_32KEY) as key:
-
-            LATEST_PATRAN_VERSION = _winreg.QueryValueEx(key, '')[0]
-
-        with _winreg.OpenKey(_winreg.HKEY_LOCAL_MACHINE,
-                             r'Software\Wow6432Node\MSC.Software Corporation\Patran x64\\' + LATEST_PATRAN_VERSION,
-                             0,
-                             _winreg.KEY_READ | _winreg.KEY_WOW64_32KEY) as key:
-
-            PATRAN_PATH = _winreg.QueryValueEx(key, 'Path')[0]
-
-        LIB_FILE_NAME = 'patran_pp.pcl'
-
-        if not os.path.exists(os.path.join(ppDir, LIB_FILE_NAME)):
-            msg = "File not found in Meta-Tools installation: {}".format(LIB_FILE_NAME)
-            logger.error()
-            sys.exit(1)
-
-        shutil.copy2(os.path.join(ppDir, LIB_FILE_NAME), os.getcwd())
-        
-        post_process = Patran_PostProcess(args, PATRAN_PATH)
-
-        success = post_process.run_patran()
-
-        if not success:
-            logger.error("post_process.run_patran() returned false")
-            sys.exit(1)
-
-        success = post_process.update_results_files()
-
-        if not success:
-            logger.error("post_process.update_results_files() returned false")
-            sys.exit(1)
-
-    except: # catch *all* exceptions
+    except Exception: # catch *all* exceptions
         import traceback
         e = sys.exc_info()[0]
         var = traceback.format_exc()
         msg = "Exception: {}".format(var)
-        logger.error(msg)
+        print(msg)
         sys.exit(1)
 

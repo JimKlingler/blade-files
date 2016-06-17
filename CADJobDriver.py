@@ -18,6 +18,11 @@ def get_function_name():
     return function_name
 
 
+def line_number_of_problem():
+    msg = "Problem at line: {}".format(inspect.currentframe().f_back.f_lineno)
+    return msg
+
+
 class CADJobDriver():
 
     def __init__(self, assembler, mesher, analyzer, mode, run_postprocessing=True):
@@ -248,37 +253,11 @@ class CADJobDriver():
             self.logger.error("- Is it in {}?".format(os.path.join('META', 'bin', 'CAD')))
             cad_library.exitwitherror(msg, 99)
 
-        # python_command = " {} {} {} {} {}".format(
-        #     cpif_path,
-        #     '-cadassembly ../../CADAssembly.xml',
-        #     '-cadassembly_metrics ../../CADAssembly_metrics.xml',
-        #     '-computedvalues ../../ComputedValues.xml',
-        #     '-copyxmltext False'
-        # )
-        #
-        # subprocess_cmd = "'{}'{}".format(sys.executable, python_command)
-        #
-        # self.logger.info("Calling {}.".format(subprocess_cmd))
-        #
-        # cpif_result = self.call_subprocess(subprocess_cmd)
-        # # cpif_result = self.popen_subprocess(sys.executable + python_command, "CreatePatranInput")
-        #
-        # if cpif_result != 0:
-        #     if cpif_result == 99:
-        #         msg = 'CreatePatranInputFile.py failed; see {}.'.format(os.path.join(patran_nastran_dir, '_FAILED.txt'))
-        #         self.logger.error(msg)
-        #         cad_library.exitwitherror(msg, -1)
-        #     else:
-        #         os.chdir(result_dir)
-        #         msg = 'CADJobDriver.run_patran_nastran() failed; try debugging directly.'
-        #         cad_library.exitwitherror(msg, -1)
-
         self.logger.info("CreatePatranModelInput.txt is created.")
 
         pcl_input_name = 'CreatePatranModelInput.txt'
         pcl_name = 'CreatePatranModel.pcl'
         ses_name = 'CreatePatranModel.ses'
-        # ses_path = r"D:\\BLADE\\meta-blademda\\bin\\CAD\\CreatePatranModel\\CreatePatranModel.ses"
 
         pcl_path = os.path.join(meta_src_cad_python, pcl_name)
         if not os.path.exists(pcl_path):
@@ -308,55 +287,74 @@ class CADJobDriver():
 
         if os.path.exists(pcl_input_name) and os.path.exists(pcl_name) and os.path.exists(ses_path):
             patran_nastran_result = self.call_subprocess(pcl_command)
-            # patran_nastran_result = self.popen_subprocess(pcl_command, 'CreatePatranModel')
 
-        self.logger.info("Skipping Post-Processing")
+            if patran_nastran_result != 0:
+                self.logger.error(line_number_of_problem())
+                msg = "Patran/Nastran ({}) failed in {}".format(pcl_command, patran_nastran_dir)
+                self.logger.error(msg)
 
-        #     if patran_nastran_result != 0:
-        #         msg = "Patran/Nastran failed in {}: '{}'".format(patran_nastran_dir, pcl_command)
-        #
-        #         if os.path.exists('log'):
-        #             with open(os.path.join('log', '_PATRAN_NASTRAN_FAILED.txt'), 'wb') as f_out:
-        #                 f_out.write(msg)
-        #
-        #         cad_library.exitwitherror(msg, -1)
-        #
-        #     else:
-        #         patran_pp_name = 'Patran_PP.py'
-        #
-        #         if not os.path.isfile(os.path.join(meta_bin_cad, patran_pp_name)):
-        #             cad_library.exitwitherror(
-        #                 'Can\'t find {}. Do you have the META toolchain installed properly?',format(patran_pp_name), -1)
-        #
-        #         post_processing_args = "{} {} {} {} {}".format(
-        #             "Nastran_mod.bdf",
-        #             "Nastran_mod.xdb",
-        #             "..\\AnalysisMetaData.xml",
-        #             "..\\..\\RequestedMetrics.xml",
-        #             "..\\..\\testbench_manifest.json"
-        #         )
-        #
-        #         # print(post_processing_args)
-        #
-        #         with open('RunPostProcessing.cmd', 'wb') as cmd_file_out:
-        #             meta_python_path = os.path.join('%MetaPath%', 'bin', 'Python27', 'Scripts', 'Python.exe')
-        #             patran_pp_path = os.path.join('bin', 'CAD', patran_pp_name)
-        #             cmd_text = '{} {} {}'.format(
-        #                 meta_python_path, os.path.join('%MetaPath%', patran_pp_path), post_processing_args)
-        #             cmd_file_out.write(cmd_text)
-        #
-        #         print("Starting {}...".format('Patran_PP'))
-        #
-        #         pp_command = "{} {} {}".format(sys.executable,
-        #                                        os.path.join(meta_bin_cad, patran_pp_name),
-        #                                        post_processing_args)
-        #
-        #         if self.run_pp:
-        #             self.call_subprocess(pp_command)
-        #
-        # else:
-        #     msg = "Could not find {}, {}, or {}.".format(pcl_input_name, pcl_name, ses_path)
-        #     cad_library.exitwitherror(msg, -1)
+                if os.path.exists('log'):
+                    with open(os.path.join('log', '_PATRAN_NASTRAN_FAILED.txt'), 'wb') as f_out:
+                        f_out.write(msg)
+
+                cad_library.exitwitherror(msg, -1)
+
+            else:
+                try:
+                    from Patran_PP import Patran_PostProcess
+
+                    patran_pp = Patran_PostProcess('Nastran_mod.bdf',
+                                                   'Nastran_mod.xdb',
+                                                   '..\\AnalysisMetaData.xml',
+                                                   '..\\..\\RequestedMetrics.xml',
+                                                   '..\\..\\testbench_manifest.json')
+
+                    pp_result = patran_pp.main()
+
+                except Exception:
+                    import traceback
+                    e = sys.exc_info()[0]
+                    var = traceback.format_exc()
+                    self.logger.error("Exception running Patran_PP: {}".format(var))
+
+                    msg = "Exception running Patran_PP: {}".format(line_number_of_problem())
+                    cad_library.exitwitherror(msg, -1)
+
+                # patran_pp_name = 'Patran_PP.py'
+                #
+                # if not os.path.isfile(os.path.join(meta_bin_cad, patran_pp_name)):
+                #     cad_library.exitwitherror(
+                #         'Can\'t find {}. Do you have the META toolchain installed properly?',format(patran_pp_name), -1)
+                #
+                # post_processing_args = "{} {} {} {} {}".format(
+                #     "Nastran_mod.bdf",
+                #     "Nastran_mod.xdb",
+                #     "..\\AnalysisMetaData.xml",
+                #     "..\\..\\RequestedMetrics.xml",
+                #     "..\\..\\testbench_manifest.json"
+                # )
+                #
+                # # print(post_processing_args)
+                #
+                # with open('RunPostProcessing.cmd', 'wb') as cmd_file_out:
+                #     meta_python_path = os.path.join('%MetaPath%', 'bin', 'Python27', 'Scripts', 'Python.exe')
+                #     patran_pp_path = os.path.join('bin', 'CAD', patran_pp_name)
+                #     cmd_text = '{} {} {}'.format(
+                #         meta_python_path, os.path.join('%MetaPath%', patran_pp_path), post_processing_args)
+                #     cmd_file_out.write(cmd_text)
+                #
+                # print("Starting {}...".format('Patran_PP'))
+                #
+                # pp_command = "{} {} {}".format(sys.executable,
+                #                                os.path.join(meta_bin_cad, patran_pp_name),
+                #                                post_processing_args)
+                #
+                # if self.run_pp:
+                #     self.call_subprocess(pp_command)
+
+        else:
+            msg = "Could not find {}, {}, or {}.".format(pcl_input_name, pcl_name, ses_path)
+            cad_library.exitwitherror(msg, -1)
 
     def popen_subprocess(self, command, log_name_no_extension=None):
 

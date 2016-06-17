@@ -91,8 +91,9 @@ class PatranPCL():
         self.material_library = {}
 
         if not os.path.exists(self.material_library_path):
-            self.material_library_path = os.path.join('C:', 'Users', 'Public', 'Documents', 'META Documents',
-                                                      'MaterialLibrary', 'material_library.json')
+            self.material_library_path = """C:\Users\Public\Documents\META Documents\MaterialLibrary\material_library.json"""
+            # self.material_library_path = os.path.join('C:', 'Users', 'Public', 'Documents', 'META Documents',
+            #                                           'MaterialLibrary', 'material_library.json')
 
             if not os.path.exists(self.material_library_path):
                 abs_path = os.path.abspath(self.material_library_path)

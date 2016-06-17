@@ -91,8 +91,12 @@ class PatranPCL():
         self.material_library = {}
 
         if not os.path.exists(self.material_library_path):
-            abs_path = os.path.abspath(self.material_library_path)
-            self.failure("Material library path invalid: {} ({})".format(abs_path, line_number_of_problem()))
+            self.material_library_path = os.path.join('C:', 'Users', 'Public', 'Documents', 'META Documents',
+                                                      'MaterialLibrary', 'material_library.json')
+
+            if not os.path.exists(self.material_library_path):
+                abs_path = os.path.abspath(self.material_library_path)
+                self.failure("Material library path invalid: {} ({})".format(abs_path, line_number_of_problem()))
 
         with open(self.material_library_path, 'r') as file_in:
             material_library = json.load(file_in)

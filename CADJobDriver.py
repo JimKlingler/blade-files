@@ -267,12 +267,16 @@ class CADJobDriver():
             shutil.copy2(ses_path, patran_nastran_dir)
 
         except Exception:
-            cad_library.exitwitherror("Could not find {} and/or {}".format(pcl_path, ses_path), -1)
+            msg = "Could not find {} and/or {}".format(pcl_path, ses_path)
+            self.logger.error(msg)
+            cad_library.exitwitherror(msg, -1)
 
         pcl_command = "patran -b -graphics -sfp  {} -stdout CreatePatranModel_Session.log".format(ses_name)
 
         with open('RunPatranNastran.cmd', 'wb') as cmd_file_out:
             cmd_file_out.write(pcl_command)
+
+        self.logger.info("Skipping Post-Processing")
 
         # if os.path.exists(pcl_input_name) and os.path.exists(pcl_name) and os.path.exists(ses_path):
         #     patran_nastran_result = self.call_subprocess(pcl_command)

@@ -232,9 +232,10 @@ class CADJobDriver():
         if not os.path.exists(patran_nastran_dir):
             os.makedirs(patran_nastran_dir)
 
+        self.logger.info("Moving to {}.".format(patran_nastran_dir))
         os.chdir(patran_nastran_dir)
 
-        python_command = " {} {} {} {} {}".format(
+        python_command = " '{}' {} {} {} {}".format(
             cpif_path,
             '-cadassembly ../../CADAssembly.xml',
             '-cadassembly_metrics ../../CADAssembly_metrics.xml',
@@ -242,16 +243,24 @@ class CADJobDriver():
             '-copyxmltext False'
         )
 
-        cpif_result = self.call_subprocess(sys.executable + python_command)
+        subprocess_cmd = "'{}'{}".format(sys.executable, python_command)
+
+        self.logger.info("Calling {}.".format(subprocess_cmd))
+
+        cpif_result = self.call_subprocess(subprocess_cmd)
         # cpif_result = self.popen_subprocess(sys.executable + python_command, "CreatePatranInput")
 
         if cpif_result != 0:
             if cpif_result == 99:
                 msg = 'CreatePatranInputFile.py failed; see {}.'.format(os.path.join(patran_nastran_dir, '_FAILED.txt'))
+                self.logger.error(msg)
                 cad_library.exitwitherror(msg, -1)
             else:
                 os.chdir(result_dir)
-                cad_library.exitwitherror('CADJobDriver.run_patran_nastran() failed; try debugging directly.', -1)
+                msg = 'CADJobDriver.run_patran_nastran() failed; try debugging directly.'
+                cad_library.exitwitherror(msg, -1)
+
+        self.logger.info("CreatePatranModelInput.txt is created.")
 
         pcl_input_name = 'CreatePatranModelInput.txt'
         pcl_name = 'CreatePatranModel.pcl'
